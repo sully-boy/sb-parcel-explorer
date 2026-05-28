@@ -444,11 +444,29 @@ async function loadParcelsInView() {
         layer.on('mouseover', (e) => {
           layer.setStyle({ fillOpacity: 0.6, weight: 2 });
           layer.bringToFront();
+          // Show zone label tooltip if zoning layer is loaded
+          const zoningLayer = state.activeFeatureLayers['zoning'];
+          if (zoningLayer) {
+            let zoneLabel = null;
+            zoningLayer.eachLayer(function(zl) {
+              if (!zoneLabel && zl.getBounds && zl.getBounds().contains(e.latlng)) {
+                const zp = zl.feature && zl.feature.properties;
+                if (zp) {
+                  const z = zp.Zone_1 || zp.ZONE || '';
+                  if (z) zoneLabel = `<b>${z}</b>${ZONE_LABELS[z] ? '<br>' + ZONE_LABELS[z] : ''}`;
+                }
+              }
+            });
+            if (zoneLabel) {
+              layer.bindTooltip(zoneLabel, { sticky: true, className: 'zone-tooltip' }).openTooltip(e.latlng);
+            }
+          }
         });
         layer.on('mouseout', () => {
           if (state.selectedParcel !== layer) {
             layer.setStyle({ fillOpacity: opacity * 0.35, weight: 1 });
           }
+          layer.unbindTooltip();
         });
       }
     );
