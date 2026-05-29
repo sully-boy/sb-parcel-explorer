@@ -1351,14 +1351,25 @@ function makeLawCard(law, subtitle, analysis, type) {
   } else if (type === 'adu') {
     details = '<div class="law-warning">' + escHtml((analysis && analysis.reason) || 'Not applicable') + '</div>';
   } else if (type === 'shra' && isEligible) {
+    const shraParcels = analysis.newParcels || analysis.maxUnits || 10;
+    const minSqft = analysis.minParcelSqft || (analysis.sb1123Eligible ? 1200 : 600);
     details +=
       '<div class="law-detail-row"><span>SB 684 (MF zones)</span><span class="law-detail-val">' + (analysis.sb684Eligible ? '✔ Eligible' : (analysis.isAudCommercial ? 'Via AUD pathway' : 'N/A')) + '</span></div>' +
       '<div class="law-detail-row"><span>SB 1123 (SF vacant)</span><span class="law-detail-val">' + (analysis.sb1123Eligible ? '✔ Eligible' : 'N/A') + '</span></div>' +
-      '<div class="law-detail-row"><span>Max Units</span><span class="law-detail-val">Up to ' + (analysis.maxUnits || 10) + ' units</span></div>' +
+      '<div class="law-detail-row"><span>New Parcels / Units</span><span class="law-detail-val">' + shraParcels + ' parcel' + (shraParcels !== 1 ? 's' : '') + ' × 1 unit each (City of SB local ordinance)</span></div>' +
+      '<div class="law-detail-row"><span>Min Parcel Size</span><span class="law-detail-val">' + minSqft.toLocaleString() + ' sq ft per new parcel</span></div>' +
+      (analysis.remainderNote ? '<div class="law-note law-note-interpretive" style="margin-top:4px">' + escHtml(analysis.remainderNote) + '</div>' : '') +
       '<div class="law-detail-row"><span>Max Unit Size</span><span class="law-detail-val">Avg ≤ ' + (analysis.maxUnitSqft || 1750) + ' sq ft</span></div>' +
       '<div class="law-detail-row"><span>Approval</span><span class="law-detail-val">' + escHtml(analysis.approval || 'Ministerial — 60 days max') + '</span></div>' +
       '<div class="law-detail-row"><span>Effective</span><span class="law-detail-val">' + escHtml(analysis.effectiveDate || '') + '</span></div>' +
-      (analysis.coastalNote ? '<div class="law-warning">' + escHtml(analysis.coastalNote) + '</div>' : '') +
+      '<div class="law-detail-row" style="margin-top:8px"><span><b>Development Standards</b></span><span class="law-detail-val"></span></div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">✓ No parking required on new parcels</div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">✓ No setbacks between units (CBC fire separation only)</div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">✓ Side/rear setbacks: max 4 ft from original lot line</div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">✓ No minimum lot frontage or dimensions</div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">• Height, FAR, and objective design standards apply per zone</div>' +
+      '<div class="law-pathway-note" style="padding-left:8px">• Inclusionary housing requirements apply</div>' +
+      (analysis.coastalNote ? '<div class="law-warning" style="margin-top:6px">' + escHtml(analysis.coastalNote) + '</div>' : '') +
       (analysis.audCommercialNote ? '<div class="law-note law-note-interpretive">' + escHtml(analysis.audCommercialNote) + '</div>' : '');
   } else if (type === 'shra') {
     details = '<div class="law-warning">' + escHtml((analysis && analysis.reason) || 'Not eligible') + '</div>';
@@ -2052,268 +2063,3 @@ async function executeSearch(q) {
     await searchByAddress(q);
   }
 }
-
-async function searchByAPN(apn, zoom = true) {
-  try {
-    setLoading(true);
-    setStatus('Searching by APN…', 'loading');
-    const data = await queryLayer(CONFIG.LAYERS.parcels, {
-      where: `APN = '${apn.replace(/'/g, "''")}'`,
-      outFields: '*',
-      returnGeometry: 'true',
-    });
-    setLoading(false);
-
-    if (!data.features?.length) {
-      showToast(`No parcel found for APN: ${apn}`, 'error');
-      setStatus('No results');
-      return;
-    }
-
-    const feature = arcgisPolygonToGeoJSON(data.features[0]);
-    if (!feature) return;
-
-    // Zoom to it
-    if (zoom) {
-      const latlngs = feature.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
-      const bounds = L.latLngBounds(latlngs);
-      state.map.fitBounds(bounds, { padding: [60, 60], maxZoom: 18 });
-    }
-
-    // Highlight on existing layer or add temp layer
-    await loadParcelsInView();
-    setTimeout(() => {
-      // Find and select the layer
-      if (state.activeFeatureLayers.parcels) {
-        state.activeFeatureLayers.parcels.eachLayer(layer => {
-          if (layer.feature?.properties?.APN === apn) {
-            selectParcel(layer.feature, layer);
-          }
-        });
-      } else {
-        showParcelDetail(feature);
-      }
-    }, 300);
-
-    setStatus(`Found APN ${apn}`);
-  } catch (e) {
-    setLoading(false);
-    showToast('Search failed: ' + e.message, 'error');
-    setStatus('Search failed', 'error');
-  }
-}
-
-async function searchByAddress(addr) {
-  try {
-    setLoading(true);
-    setStatus('Searching by address…', 'loading');
-    const safAddr = addr.replace(/'/g, "''").toUpperCase();
-    const data = await queryLayer(CONFIG.LAYERS.parcels, {
-      where: `UPPER(Situs1) LIKE '%${safAddr}%' OR UPPER(Situs2) LIKE '%${safAddr}%'`,
-      outFields: '*',
-      returnGeometry: 'true',
-      resultRecordCount: 20,
-    });
-    setLoading(false);
-
-    if (!data.features?.length) {
-      showToast(`No parcels found for "${addr}"`, 'error');
-      setStatus('No results');
-      return;
-    }
-
-    if (data.features.length === 1) {
-      const feature = arcgisPolygonToGeoJSON(data.features[0]);
-      if (!feature) return;
-      const latlngs = feature.geometry.coordinates[0].map(([lng, lat]) => [lat, lng]);
-      state.map.fitBounds(L.latLngBounds(latlngs), { padding: [60, 60], maxZoom: 18 });
-      await loadParcelsInView();
-      setTimeout(() => {
-        if (state.activeFeatureLayers.parcels) {
-          state.activeFeatureLayers.parcels.eachLayer(layer => {
-            const p = layer.feature?.properties;
-            if (p && (p.Situs1?.toUpperCase().includes(addr.toUpperCase()) || p.Situs2?.toUpperCase().includes(addr.toUpperCase()))) {
-              selectParcel(layer.feature, layer);
-            }
-          });
-        }
-      }, 300);
-    } else {
-      // Multiple results: populate table, zoom to extent
-      const geojsonFeatures = data.features.map(arcgisPolygonToGeoJSON).filter(Boolean);
-      populateResultsTable(data.features);
-      const allCoords = geojsonFeatures.flatMap(f => f.geometry.coordinates[0]).map(([lng, lat]) => [lat, lng]);
-      if (allCoords.length) state.map.fitBounds(L.latLngBounds(allCoords), { padding: [40, 40] });
-      showToast(`Found ${data.features.length} parcels matching "${addr}"`, 'info');
-    }
-    setStatus(`Found ${data.features.length} result(s)`);
-  } catch (e) {
-    setLoading(false);
-    showToast('Search failed: ' + e.message, 'error');
-    setStatus('Search failed', 'error');
-  }
-}
-
-// ── GeoJSON Export ───────────────────────────────────────────
-function exportGeoJSON(features, filename = 'sb_parcels') {
-  const geojson = {
-    type: 'FeatureCollection',
-    features: features.map(f => {
-      if (f.type === 'Feature') return f;
-      return arcgisPolygonToGeoJSON(f);
-    }).filter(Boolean),
-    metadata: {
-      source: 'City of Santa Barbara ArcGIS REST API',
-      endpoint: CONFIG.CITY_BASE,
-      timestamp: new Date().toISOString(),
-      crs: 'WGS84 (EPSG:4326)',
-    },
-  };
-  const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${filename}_${new Date().toISOString().slice(0, 10)}.geojson`;
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast(`Exported ${geojson.features.length} features as GeoJSON`, 'success');
-}
-
-document.getElementById('exportAll').addEventListener('click', () => {
-  if (!state.lastSearchResults.length) {
-    showToast('No data to export — load parcels first', 'error');
-    return;
-  }
-  const geojsonFeatures = state.lastSearchResults
-    .map(f => f.attributes ? arcgisPolygonToGeoJSON({ geometry: f.geometry, attributes: f.attributes }) : f)
-    .filter(Boolean);
-  exportGeoJSON(geojsonFeatures, 'sb_parcels_view');
-});
-
-// ── Layer toggles ────────────────────────────────────────────
-document.querySelectorAll('input[data-layer]').forEach(cb => {
-  cb.addEventListener('change', async () => {
-    const key = cb.dataset.layer;
-    const checked = cb.checked;
-
-    if (checked) {
-      switch (key) {
-        case 'parcels':
-          if (state.map.getZoom() >= 14) loadParcelsInView();
-          else { showToast('Zoom in to zoom level 14+ to see parcel boundaries', 'info'); cb.checked = false; }
-          break;
-        case 'zoning': loadZoningInView(); break;
-        case 'city-limits': loadCityLimits(); break;
-        case 'assessment-chips': loadAssessmentChips(); break;
-        case 'neighborhoods': loadNeighborhoods(); break;
-        case 'high-fire': loadHighFire(); break;
-        case 'fema-flood': loadFemaFlood(); break;
-        case 'coastal-zone': loadCoastalZone(); break;
-        case 'historic': loadHistoricSites(); break;
-        case 'county-parcels':
-          if (state.map.getZoom() >= 13) loadCountyParcelsInView();
-          else { showToast('Zoom in to see county parcels', 'info'); cb.checked = false; }
-          break;
-      }
-    } else {
-      removeLayer(key);
-    }
-  });
-});
-
-// Reset layers button
-document.getElementById('resetLayers').addEventListener('click', () => {
-  document.querySelectorAll('input[data-layer]').forEach(cb => {
-    const shouldBeOn = ['parcels', 'city-limits'].includes(cb.dataset.layer);
-    if (cb.checked !== shouldBeOn) {
-      cb.checked = shouldBeOn;
-      cb.dispatchEvent(new Event('change'));
-    }
-  });
-  showToast('Layers reset to defaults', 'info');
-});
-
-// ── Basemap switching ────────────────────────────────────────
-document.querySelectorAll('.basemap-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const key = btn.dataset.basemap;
-    if (key === state.currentBasemap) return;
-    state.map.removeLayer(BASEMAPS[state.currentBasemap]);
-    BASEMAPS[key].addTo(state.map);
-    BASEMAPS[key].bringToBack();
-    state.currentBasemap = key;
-    document.querySelectorAll('.basemap-btn').forEach(b => b.classList.toggle('active', b.dataset.basemap === key));
-  });
-});
-
-// ── Opacity controls ─────────────────────────────────────────
-document.querySelectorAll('.opacity-slider').forEach(slider => {
-  slider.addEventListener('input', () => {
-    const key = slider.dataset.opacity;
-    const val = parseFloat(slider.value);
-    state.layerOpacity[key] = val;
-    if (state.activeFeatureLayers[key]) {
-      state.activeFeatureLayers[key].setStyle({ fillOpacity: val * (key === 'zoning' ? 1 : 0.35), opacity: val });
-    }
-  });
-});
-
-// ── Detail tab switching ──────────────────────────────────────
-function switchTab(tabName) {
-  document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.hidden = true);
-  const tabEl = document.querySelector(`.detail-tab[data-tab="${tabName}"]`);
-  if (tabEl) tabEl.classList.add('active');
-  const contentEl = document.getElementById('tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1));
-  if (contentEl) contentEl.hidden = false;
-}
-
-document.querySelectorAll('.detail-tab').forEach(tab => {
-  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-});
-
-// ── Expose export handler for UIWiring re-attachment ────────
-window._handleExportParcel = null; // set in showParcelDetail
-
-// Close detail panel
-document.getElementById('closeDetail').addEventListener('click', () => {
-  document.getElementById('detailPanel').style.display = 'none';
-  if (state.selectedParcel) {
-    try { state.selectedParcel.setStyle({ fillOpacity: state.layerOpacity.parcels * 0.35, weight: 1, color: '#1a5f7a' }); } catch(e) {}
-    state.selectedParcel = null;
-  }
-  // If there are results in the table, show the results section; otherwise show empty state
-  const hasResults = state.lastSearchResults && state.lastSearchResults.length > 0;
-  if (hasResults) {
-    document.getElementById('resultsSection').style.display = 'flex';
-    document.getElementById('detailEmpty').style.display = 'none';
-  } else {
-    document.getElementById('detailEmpty').style.display = 'flex';
-    document.getElementById('resultsSection').style.display = 'none';
-  }
-  // Close mobile bottom sheet
-  if (window.MobileUI) window.MobileUI.closePanel();
-});
-
-// ── Dark mode toggle ─────────────────────────────────────────
-(function () {
-  const t = document.querySelector('[data-theme-toggle]');
-  const r = document.documentElement;
-  let d = matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light';
-  r.setAttribute('data-theme', d);
-  t && t.addEventListener('click', () => {
-    d = d === 'dark' ? 'light' : 'dark';
-    r.setAttribute('data-theme', d);
-    t.innerHTML = d === 'dark'
-      ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>'
-      : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-  });
-})();
-
-// ── Initial data load ────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  initMap();
-  // Load city limits immediately since it's always-on
-  // Parcels will auto-load via zoom/move events
-  showToast('Connected to Santa Barbara GIS Portal', 'success', 3000);
-});
