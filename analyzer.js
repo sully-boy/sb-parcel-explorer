@@ -878,13 +878,38 @@ function analyzeSHRA(zone, lotSqft, isSF, isMF, isCoastal, isHighFire, isHistori
   else if (sb684Eligible) effectiveDate = 'SB 684 effective July 1, 2024';
   else effectiveDate = 'SB 684 effective July 1, 2024 (AUD residential pathway required first)';
 
+  // ── Parcel count calculation ──────────────────────────────────
+  // MF zones: min 600 sf per new parcel (SB 684)
+  // SF zones: min 1,200 sf per new parcel (SB 1123)
+  // AUD commercial: treated as MF for this calculation
+  // Capped at 10 per statute. City of SB local ordinance: 1 unit per new parcel, no ADU stacking.
+  const minParcelSqft = sb1123Eligible ? 1200 : 600;
+  const rawParcels = Math.floor(lotSqft / minParcelSqft);
+  const newParcels = Math.min(rawParcels, 10);
+  const remainderSqft = lotSqft - (newParcels * minParcelSqft);
+  const remainderFraction = remainderSqft / minParcelSqft;
+
+  // Remainder parcel display logic:
+  // < 0.25 → don't mention (too small to be meaningful)
+  // 0.25–0.5 → show as "small remainder parcel (likely not independently buildable)"
+  // > 0.5 → show as buildable remainder parcel
+  let remainderNote = null;
+  if (remainderFraction >= 0.5) {
+    remainderNote = `+ 1 remainder parcel (${remainderSqft.toLocaleString()} sq ft — may be buildable; see AB 130)`;
+  } else if (remainderFraction >= 0.25) {
+    remainderNote = `+ small remainder parcel (${remainderSqft.toLocaleString()} sq ft — likely not independently buildable)`;
+  }
+
   return {
     sb684Eligible,
     sb1123Eligible,
     isAudCommercial,
     effectiveDate,
-    maxUnits: 10,
-    maxLots: 10,
+    newParcels,
+    remainderNote,
+    minParcelSqft,
+    maxUnits: newParcels,  // 1 unit per parcel per City of SB local ordinance
+    maxLots: newParcels,
     maxUnitSqft: 1750,
     noSetbackBetweenUnits: true,
     sideRearSetback: '4 ft from original lot line',
@@ -1173,17 +1198,18 @@ function calcMaxUnits(zone, sb9, adu, shra, dbl, ar, ab2011, base, lotSqft, audT
     });
   }
 
-  // SHRA uplift
+  // SHRA uplift — use calculated parcel count (1 unit per parcel, City of SB local ordinance)
   if (shra.sb684Eligible || shra.sb1123Eligible || shra.isAudCommercial) {
-    const shraMax = 10;
-    if (shraMax > withStateLaw) withStateLaw = shraMax;
-    absolute = 10;
+    const shraUnits = shra.newParcels || 10;
+    if (shraUnits > withStateLaw) withStateLaw = shraUnits;
+    absolute = Math.max(absolute, shraUnits);
+    const shraNote = isCoastal
+      ? `${shraUnits} parcel${shraUnits !== 1 ? 's' : ''}, Special Process Required (CDP), avg ≤1,750 sq ft`
+      : `${shraUnits} parcel${shraUnits !== 1 ? 's' : ''} (1 unit each), ministerial, avg ≤1,750 sq ft`;
     breakdown.push({
       law: 'SB 684/1123 (SHRA)',
-      units: 10,
-      note: isCoastal
-        ? '≤10 units, Special Process Required (CDP), avg ≤1,750 sq ft'
-        : '≤10 units, ministerial, avg ≤1,750 sq ft'
+      units: shraUnits,
+      note: shraNote + (shra.remainderNote ? ' — ' + shra.remainderNote : ''),
     });
   } else {
     absolute = withStateLaw;
